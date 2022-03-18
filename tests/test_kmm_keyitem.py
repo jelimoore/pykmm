@@ -1,6 +1,6 @@
 import unittest
 
-from ..src.pykmm.kmm import KeyItem
+from pykmm.kmm.KeyItem import KeyItem
 
 class TestKeyItem(unittest.TestCase):
     def setUp(self):
@@ -11,7 +11,7 @@ class TestKeyItem(unittest.TestCase):
         """Tear down."""
         del self._keyitem
 
-    def sln_tests(self):
+    def test_sln(self):
         """Test all SLN get, set, and invalid paths"""
 
         # set the SLN then get it
@@ -34,3 +34,6 @@ class TestKeyItem(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self._keyitem.sln = 0xFFFFFF
+
+if __name__ == '__main__':
+    unittest.main()
