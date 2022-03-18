@@ -1,6 +1,6 @@
 import unittest
 
-from pykmm.kmm import KeyItem
+from ..src.pykmm.kmm import KeyItem
 
 class TestKeyItem(unittest.TestCase):
     def setUp(self):
