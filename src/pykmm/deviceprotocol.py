@@ -29,42 +29,27 @@ import serial
 from enum import Enum
 import time
 
-class KFDTimeout(Exception):
-    pass
-
-class KFDInvalidOpcode(Exception):
-    pass
-
-class KFDWriteFailed(Exception):
-    pass
-
-class KFDRadioTimeout(Exception):
-    pass
-
-
-class KFDSelfTestCodes(Enum):
-    SELFTEST_PASS = 0
-    SELFTEST_FAIL_DATA_SHORT_TO_GND = 1
-    SELFTEST_FAIL_SENSE_SHORT_TO_GND = 2
-    SELFTEST_FAIL_DATA_SHORT_TO_VCC = 3
-    SELFTEST_FAIL_SENSE_SHORT_TO_VCC = 4
-    SELFTEST_DATA_SENSE_SHORT = 5
-    SELFTEST_SENSE_DATA_SHORT = 6
+from pykmm.kmm.items import KeyItem
 
 
 class OPKFD():
     '''A generic class for communication with open source hardware keyloaders'''
-    READ_REQ = 0x11
-    WRITE_REQ = 0x12
-    ENTER_BOOTLOADER = 0x13
-    RESET = 0x14
-    SELF_TEST = 0x15
-    SEND_KEY_SIG = 0x16
-    SEND_BYTE = 0x17
+    CMD_READ_REQ = 0x11
+    CMD_WRITE_REQ = 0x12
+    CMD_ENTER_BOOTLOADER = 0x13
+    CMD_RESET = 0x14
+    CMD_SELF_TEST = 0x15
+    CMD_SEND_KEY_SIG = 0x16
+    CMD_SEND_BYTE = 0x17
 
-    ERROR_REPLY = 0x20
-    READ_REPLY = 0x21
-    WRITE_REPLY = 0x22
+    REPLY_ERROR = 0x20
+    REPLY_READ = 0x21
+    REPLY_WRITE = 0x22
+    REPLY_ENTER_BSL_MODE = 0x23
+    REPLY_RESET = 0x24
+    REPLY_SELF_TEST = 0x25
+    REPLY_SEND_KEYSIG = 0x26
+    REPLY_SEND_BYTE = 0x27
 
     READ_ADAPTER_VER = 0x01
     READ_FW_VER = 0x02
@@ -76,8 +61,23 @@ class OPKFD():
     WRITE_MODEL = 0x01
     WRITE_SN = 0x02
 
+    ERROR_OTHER = 0x00
     ERROR_INVALID_CMD_LENGTH = 0x01
+    ERROR_INVALID_CMD_OPCODE = 0x02
+    ERROR_INVALID_READ_OPCODE = 0x03
+    ERROR_READ_FAILED = 0x04
+    ERROR_INVALID_WRITE_OPCODE = 0x05
     ERROR_WRITE_FAILED = 0x06
+
+    KFDSelfTestCodes = [
+    "PASS",
+    "DATA_SHORT_TO_GND",
+    "SENSE_SHORT_TO_GND",
+    "DATA_SHORT_TO_VCC",
+    "SENSE_SHORT_TO_VCC",
+    "DATA_SENSE_SHORT",
+    "SENSE_DATA_SHORT",
+    ]
 
     def __init__(self, port):
         self.AdapterProtocolVersion = None
@@ -88,7 +88,7 @@ class OPKFD():
         self.SerialNumber = None
 
     def _getInfo(self):
-        '''Method to collect all applicable metadata (adapter protocol, firmware version, etc) from the keyloader'''
+        '''Method to collect all applicable metadata (adapter protocol, firmware version, etc) from the keyloader and update the object'''
         self._openSerial()
         self.AdapterProtocolVersion = self._readInfo(OPKFD.READ_ADAPTER_VER)
         self.FirmwareVersion = self._readInfo(OPKFD.READ_FW_VER)
@@ -99,13 +99,14 @@ class OPKFD():
         self._closeSerial()
 
     def _readInfo(self, infoToRead):
-        command = [OPKFD.READ_REQ, infoToRead]
+        '''Method to request data from keyloader'''
+        command = [OPKFD.CMD_READ_REQ, infoToRead]
         self.writeToSerial(command)
         resp = self.readFromSerial()
         
         opcode = resp[0]
         subop = resp[1]
-        if (opcode == OPKFD.READ_REPLY):
+        if (opcode == OPKFD.REPLY_READ):
             if (subop == OPKFD.READ_ADAPTER_VER):
                 adpver = "{}.{}.{}".format(resp[2], resp[3], resp[4])
                 return adpver
@@ -133,11 +134,13 @@ class OPKFD():
                 else:
                     serialNo = "NOT SET"
                 return serialNo
+            else:
+                raise Exception("Unknown data type received: {}".format(subop))
         else:
             raise Exception("Expected READ_REPLY opcode (0x21) but got {}".format(opcode))
 
     def writeModelInfo(self, hwid, hwrevMaj, hwrevMin):
-        c = self._genInfoBytes(KFDTool.WRITE_REQ, KFDTool.WRITE_MODEL, hwid, hwrevMaj, hwrevMin)
+        c = self._genInfoBytes(KFDTool.CMD_WRITE_REQ, KFDTool.WRITE_MODEL, hwid, hwrevMaj, hwrevMin)
         #print("Writing bytes: {}".format(c))
         self._serial.write(c)
         resp = self._serial.read(3)
@@ -173,14 +176,14 @@ class OPKFD():
         self._serial.write(command)
 
     def selfTest(self):
-        command = OPKFD.SELF_TEST
+        command = [OPKFD.CMD_SELF_TEST]
         self.writeToSerial(command)
-        resp = self._serial.read(4)
-        testResult = KFDSelfTestCodes(int.from_bytes(resp[2:3], "big"))
-        return testResult
+        resp = self.readFromSerial()
+        assert resp[0] == OPKFD.REPLY_SELF_TEST
+        return resp[1]
         
     def sendTwiByte(self, byte):
-        command = [OPKFD.SEND_BYTE + 0x00 + byte]
+        command = [OPKFD.CMD_SEND_BYTE + 0x00 + byte]
         self.writeToSerial(command)
 
     def writeToSerial(self, command):
@@ -226,6 +229,12 @@ class KFDAVR(OPKFD):
     SERIAL_FOOTER_PLACEHOLDER = 0x64
     SERIAL_ESC = 0x70
     SERIAL_ESC_PLACEHOLDER = 0x71
+
+    READ_KEY_INFO = 0x07
+
+    WRITE_KEY = 0x03
+
+    MAX_INSTALLED_KEYS = 15
 
     def __init__(self, port):
         super()
@@ -314,12 +323,37 @@ class KFDAVR(OPKFD):
         else:
             raise TimeoutError("KFD failed to reply in a timely manner.")
             return
+    
+    def getInstalledKeyInfo(self):
+        '''Return a list of all keys installed on the KFD-AVR'''
+        installedKeys = []
+        for i in range(0, KFDAVR.MAX_INSTALLED_KEYS):
+            command = [OPKFD.READ_REQ, KFDAVR.READ_KEY_INFO, i]
+            self.writeToSerial(command)
+            resp = self.readFromSerial()
+            
+            opcode = resp[0]
+            subop = resp[1]
+            assert opcode == OPKFD.READ_REPLY
+            assert subop == KFDAVR.READ_KEY_INFO
 
+            ckr |= cmdData[4] << 8
+            ckr |= cmdData[5]
+            kid |= cmdData[6] << 8
+            kid |= cmdData[7]
+    def writeInstalledKey(self, keyToInstall):
+        if (isinstance(keyToInstall, KeyItem)):
+            pass
+        else:
+            raise TypeError("You must pass a KeyItem type to me; see pykmm.kmm.items.KeyItem")
+
+    def zeroizeInstalledKeys(self):
+        command = [OPKFD.WRITE_REQ, KFDAVR.WRITE_KEY, 0xFE]
         
     def enterBootloader(self):
         raise NotImplementedError("Bootloader mode does not exist on KFD-AVR")
 
-if __name__ == "__main__":
+def main():
     '''Execute basic test gathering info from connected keyloader'''
     import sys
     serialPort = 'COM3'
@@ -334,5 +368,11 @@ if __name__ == "__main__":
     print("MdlNo\t: {}".format(kfd.ModelNumber))
     print("HwRev\t: {}".format(kfd.HardwareRevision))
     print("SerNo\t: {}".format(kfd.SerialNumber))
+    selfTestResult = kfd.selfTest()
+    selfTestText = KFDAVR.KFDSelfTestCodes[selfTestResult]
+    print("SelfTest: {} ({})".format(selfTestResult, selfTestText))
 
     sys.exit()
+
+if __name__ == "__main__":
+    main()
