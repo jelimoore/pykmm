@@ -24,10 +24,12 @@
 #   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 ###############################################################################
 
+from struct import unpack
 import serial
 from enum import Enum
+import time
 
-class KFDReplyFailed(Exception):
+class KFDTimeout(Exception):
     pass
 
 class KFDInvalidOpcode(Exception):
@@ -52,30 +54,30 @@ class KFDSelfTestCodes(Enum):
 
 class OPKFD():
     '''A generic class for communication with open source hardware keyloaders'''
-    READ_REQ = b'\x11'
-    WRITE_REQ = b'\x12'
-    ENTER_BOOTLOADER = b'\x13'
-    RESET = b'\x14'
-    SELF_TEST = b'\x15'
-    SEND_KEY_SIG = b'\x16'
-    SEND_BYTE = b'\x17'
+    READ_REQ = 0x11
+    WRITE_REQ = 0x12
+    ENTER_BOOTLOADER = 0x13
+    RESET = 0x14
+    SELF_TEST = 0x15
+    SEND_KEY_SIG = 0x16
+    SEND_BYTE = 0x17
 
-    ERROR_REPLY = b'\x20'
-    READ_REPLY = b'\x21'
-    WRITE_REPLY = b'\x22'
+    ERROR_REPLY = 0x20
+    READ_REPLY = 0x21
+    WRITE_REPLY = 0x22
 
-    READ_ADAPTER_VER = b'\x01'
-    READ_FW_VER = b'\x02'
-    READ_UID = b'\x03'
-    READ_MODEL = b'\x04'
-    READ_HW_REV = b'\x05'
-    READ_SN = b'\x06'
+    READ_ADAPTER_VER = 0x01
+    READ_FW_VER = 0x02
+    READ_UID = 0x03
+    READ_MODEL = 0x04
+    READ_HW_REV = 0x05
+    READ_SN = 0x06
 
-    WRITE_MODEL = b'\x01'
-    WRITE_SN = b'\x02'
+    WRITE_MODEL = 0x01
+    WRITE_SN = 0x02
 
-    ERROR_INVALID_CMD_LENGTH = b'\x01'
-    ERROR_WRITE_FAILED = b'\x06'
+    ERROR_INVALID_CMD_LENGTH = 0x01
+    ERROR_WRITE_FAILED = 0x06
 
     def __init__(self, port):
         self.AdapterProtocolVersion = None
@@ -87,87 +89,52 @@ class OPKFD():
 
     def _getInfo(self):
         '''Method to collect all applicable metadata (adapter protocol, firmware version, etc) from the keyloader'''
-        self.AdapterProtocolVersion = self._getAdapterVer()
-        self.FirmwareVersion = self._getFwVer()
-        self.UID = self._getUID()
-        self.ModelNumber = self._getModel()
-        self.HardwareRevision = self._getHwRev()
-        self.SerialNumber = self._getSerialNumber()
+        self._openSerial()
+        self.AdapterProtocolVersion = self._readInfo(OPKFD.READ_ADAPTER_VER)
+        self.FirmwareVersion = self._readInfo(OPKFD.READ_FW_VER)
+        self.UID = self._readInfo(OPKFD.READ_UID)
+        self.ModelNumber = self._readInfo(OPKFD.READ_MODEL)
+        self.HardwareRevision = self._readInfo(OPKFD.READ_HW_REV)
+        self.SerialNumber = self._readInfo(OPKFD.READ_SN)
+        self._closeSerial()
 
-    def _getAdapterVer(self):
-        command = [OPKFD.READ_REQ, OPKFD.READ_ADAPTER_VER]
+    def _readInfo(self, infoToRead):
+        command = [OPKFD.READ_REQ, infoToRead]
         self.writeToSerial(command)
         resp = self.readFromSerial()
-        return command
-
-    def _getFwVer(self):
-        command = [OPKFD.READ_REQ, OPKFD.READ_FW_VER]
-        return command
-
-    def _getUID(self):
-        command = [OPKFD.READ_REQ, OPKFD.READ_UID]
-        return command
-
-    def _getModel(self):
-        c = self._genInfoBytes(KFDTool.READ_REQ, KFDTool.READ_MODEL)
-        self._serial.write(c)
-        resp = self._serial.read(5)
-        # check that the reply is what we're expecting
-        result = resp[1:2]
-        opcode = resp[2:3]
-
-        modelId = 0
-
-        if (result == KFDTool.READ_REPLY and opcode == KFDTool.READ_MODEL):
-            modelId = int.from_bytes(resp[3:4], "big")
+        
+        opcode = resp[0]
+        subop = resp[1]
+        if (opcode == OPKFD.READ_REPLY):
+            if (subop == OPKFD.READ_ADAPTER_VER):
+                adpver = "{}.{}.{}".format(resp[2], resp[3], resp[4])
+                return adpver
+            elif (subop == OPKFD.READ_FW_VER):
+                fwver = "{}.{}.{}".format(resp[2], resp[3], resp[4])
+                return fwver
+            elif (subop == OPKFD.READ_UID):
+                uid = ""
+                for i in range(2, len(resp)):
+                    uid += "{}".format(resp[i])
+                return uid
+            elif (subop == OPKFD.READ_MODEL):
+                modelno = resp[2]
+                return modelno
+            elif (subop == OPKFD.READ_HW_REV):
+                hwrev = "{}.{}".format(resp[2], resp[3])
+                return hwrev
+            elif (subop == OPKFD.READ_SN):
+                serialLength = resp[2]
+                serialNo = ""
+                if (serialLength > 0):
+                    for i in range(3, serialLength+3):
+                        print("Serial number byte: {}".format(resp[i]))
+                        serialNo += "{}".format(str(resp[i]))
+                else:
+                    serialNo = "NOT SET"
+                return serialNo
         else:
-            raise KFDReplyFailed("KFDTool replied with a bad code")
-
-        return modelId
-
-    def _getHwRev(self):
-        c = self._genInfoBytes(KFDTool.READ_REQ, KFDTool.READ_HW_REV)
-        self._serial.write(c)
-        resp = self._serial.read(6)
-        # check that the reply is what we're expecting
-        result = resp[1:2]
-        opcode = resp[2:3]
-
-        version = ""
-
-        if (result == KFDTool.READ_REPLY and opcode == KFDTool.READ_HW_REV):
-            major = int.from_bytes(resp[3:4], "big")
-            minor = int.from_bytes(resp[4:5], "big")
-
-            version = "{}.{}".format(major, minor)
-        else:
-            raise KFDReplyFailed("KFDTool replied with a bad code")
-
-        return version
-
-    def _getSerialNumber(self):
-        c = self._genInfoBytes(KFDTool.READ_REQ, KFDTool.READ_SN)
-        self._serial.write(c)
-        resp = self._serial.read(11)
-        # check that the reply is what we're expecting
-        result = resp[1:2]
-        opcode = resp[2:3]
-        length = resp[3:4]
-
-        serial = ""
-
-        if (result == KFDTool.READ_REPLY and opcode == KFDTool.READ_SN):
-            if (length == b'\x00'):
-                #no serial number
-                return None
-            offset = 4
-            for i in range(0,5):
-                uidByte = resp[offset+i:offset+i+1].hex()
-                serial += "{}".format(uidByte)
-        else:
-            raise KFDReplyFailed("KFDTool replied with a bad code")
-
-        return serial
+            raise Exception("Expected READ_REPLY opcode (0x21) but got {}".format(opcode))
 
     def writeModelInfo(self, hwid, hwrevMaj, hwrevMin):
         c = self._genInfoBytes(KFDTool.WRITE_REQ, KFDTool.WRITE_MODEL, hwid, hwrevMaj, hwrevMin)
@@ -213,52 +180,29 @@ class OPKFD():
         return testResult
         
     def sendTwiByte(self, byte):
-        command = [OPKFD.SEND_BYTE + b'\x00' + byte]
+        command = [OPKFD.SEND_BYTE + 0x00 + byte]
         self.writeToSerial(command)
-
-    def _genInfoBytes(self, reqType, info, *args):
-        command = b''
-        if (reqType == KFDTool.READ_REQ):
-            command = KFDTool.SERIAL_HEADER + reqType + info + KFDTool.SERIAL_FOOTER
-        if (reqType == KFDTool.WRITE_REQ):
-            if (info == KFDTool.WRITE_MODEL):
-                hwid = int(args[0]).to_bytes(1, "big")
-                hwverMin = int(args[1]).to_bytes(1, "big")
-                hwverMaj = int(args[2]).to_bytes(1, "big")
-
-                command = KFDTool.SERIAL_HEADER + reqType + info + hwid + hwverMin + hwverMaj + KFDTool.SERIAL_FOOTER
-            if (info == KFDTool.WRITE_SN):
-                serialString = args[0]
-                #convert sn to uppercase, idk why but it gets borked sometimes if it's lower
-                serialString = serialString.upper()
-                #check if the wanted serial is too long
-                if (len(serialString) > 6):
-                    raise ValueError("Your serial number is too long. Try a shorter one.")
-                serialBytes = serialString.encode()
-
-                #pad the bytes out
-
-                while (len(serialBytes) < 6):
-                    serialBytes += b'\x00'
-
-                command = KFDTool.SERIAL_HEADER + reqType + info + serialBytes + KFDTool.SERIAL_FOOTER
-
-        return command
 
     def writeToSerial(self, command):
         """Frames and sends data to the keyloader"""
         raise NotImplementedError("Must be implemented in child class to frame and send data")
 
-    def readFromSerial(self, command):
-        """Reads and un-frames data from the keyloader"""
+    def readFromSerial(self):
+        """Blocking method to read and un-frame data from the keyloader"""
         raise NotImplementedError("Must be implemented in child class to frame and send data")
+
+    def _openSerial(self):
+        raise NotImplementedError
+
+    def _closeSerial(self):
+        raise NotImplementedError
 
 class KFDTool(OPKFD):
     '''Class to handle communication with the KFDTool'''
-    SERIAL_HEADERFOOTER = b'\x61'
-    SERIAL_HEADERFOOTER_PLACEHOLDER = b'\x62'
-    SERIAL_ESC = b'\x63'
-    SERIAL_ESC_PLACEHOLDER = b'\x64'
+    SERIAL_HEADERFOOTER = 0x61
+    SERIAL_HEADERFOOTER_PLACEHOLDER = 0x62
+    SERIAL_ESC = 0x63
+    SERIAL_ESC_PLACEHOLDER = 0x64
 
     def __init__(self, port):
         super()
@@ -268,23 +212,50 @@ class KFDTool(OPKFD):
     def _getInfo(self):
         raise NotImplementedError
 
+    def openSerial(self):
+        raise NotImplementedError
+
+    def closeSerial(self):
+        raise NotImplementedError
+
 class KFDAVR(OPKFD):
     '''Class to handle communication with the KFD-AVR family'''
-    SERIAL_HEADER = b'\x61'
-    SERIAL_HEADER_PLACEHOLDER = b'\x62'
-    SERIAL_FOOTER = b'\x63'
-    SERIAL_FOOTER_PLACEHOLDER = b'\x64'
-    SERIAL_ESC = b'\x70'
-    SERIAL_ESC_PLACEHOLDER = b'\x71'
+    SERIAL_HEADER = 0x61
+    SERIAL_HEADER_PLACEHOLDER = 0x62
+    SERIAL_FOOTER = 0x63
+    SERIAL_FOOTER_PLACEHOLDER = 0x64
+    SERIAL_ESC = 0x70
+    SERIAL_ESC_PLACEHOLDER = 0x71
 
     def __init__(self, port):
         super()
-        # set DSR/DTR to false to prevent a reset upon connection
-        self._serialPort = serial.Serial(port, 115200, timeout=2, dsrdtr=False)
+        # set DSR/DTR to prevent a reset upon connection
+        self._serialPort = serial.Serial(port, 
+                                         baudrate=115200,
+                                         timeout=2,
+                                         xonxoff=0,
+                                         rtscts=0,
+                                         dsrdtr=True
+                                         )
         self._getInfo()
+
+    def _openSerial(self):
+        if (self._serialPort.is_open):
+            #don't open an already open port
+            pass
+        else:
+            self._serialPort.open()
+
+    def _closeSerial(self):
+        if (self._serialPort.is_open):
+            self._serialPort.close()
+        else:
+            #don't close an already closed port
+            pass
 
     def writeToSerial(self, command):
         """Frames and sends data to the keyloader"""
+        self._openSerial()
         toSend = bytearray()
         toSend.append(KFDAVR.SERIAL_HEADER)
 
@@ -308,9 +279,43 @@ class KFDAVR(OPKFD):
         toSend.append(KFDAVR.SERIAL_FOOTER)
 
         self._serialPort.write(toSend)
-        
-        
 
+    def readFromSerial(self):
+        unpackedData = []
+        fullFrameReceived = False
+        #set a timeout so we don't loop forever, 2 sec is probably fine
+        t_end = time.time() + 2
+        while time.time() < t_end:
+            b = self._serialPort.read(1)
+            b = int.from_bytes(b, "big")
+            if (b == KFDAVR.SERIAL_HEADER):
+                # if we get a header, clear the buffer
+                unpackedData = []
+            elif (b == KFDAVR.SERIAL_FOOTER):
+                #clean up and un-escape bytes
+                for i in range(0, len(unpackedData)):
+                    if (unpackedData[i] == KFDAVR.SERIAL_ESC):
+                        del unpackedData[i]
+                        if (unpackedData[i] == KFDAVR.SERIAL_ESC_PLACEHOLDER):
+                            unpackedData[i] = KFDAVR.SERIAL_ESC
+                        elif (unpackedData[i] == KFDAVR.SERIAL_HEADER_PLACEHOLDER):
+                            unpackedData[i] = KFDAVR.SERIAL_HEADER
+                        elif (unpackedData[i] == KFDAVR.SERIAL_FOOTER_PLACEHOLDER):
+                            unpackedData[i] = KFDAVR.SERIAL_FOOTER
+                        else:
+                            raise Exception("Invalid character after escape")
+                fullFrameReceived = True
+                break
+            else:
+                unpackedData.append(b)
+
+        if (fullFrameReceived):
+            return unpackedData
+        else:
+            raise TimeoutError("KFD failed to reply in a timely manner.")
+            return
+
+        
     def enterBootloader(self):
         raise NotImplementedError("Bootloader mode does not exist on KFD-AVR")
 
@@ -323,6 +328,11 @@ if __name__ == "__main__":
     #serialPort = 'COM8'
     #kfd = KFDTool(serialPort)
     print("Connected to {}".format(serialPort))
-    print("Serial Number: {}".format(kfd.SerialNumber))
+    print("Serial\t: {}".format(kfd.AdapterProtocolVersion))
+    print("FwVer\t: {}".format(kfd.FirmwareVersion))
+    print("UID\t: {}".format(kfd.UID))
+    print("MdlNo\t: {}".format(kfd.ModelNumber))
+    print("HwRev\t: {}".format(kfd.HardwareRevision))
+    print("SerNo\t: {}".format(kfd.SerialNumber))
 
     sys.exit()
