@@ -31,6 +31,10 @@ import time
 
 from pykmm.kmm.items import KeyItem
 
+class DLI():
+    def __init__(self):
+        self.ip = "0.0.0.0"
+        self.port = 1234
 
 class OPKFD():
     '''A generic class for communication with open source hardware keyloaders'''
@@ -328,27 +332,51 @@ class KFDAVR(OPKFD):
         '''Return a list of all keys installed on the KFD-AVR'''
         installedKeys = []
         for i in range(0, KFDAVR.MAX_INSTALLED_KEYS):
-            command = [OPKFD.READ_REQ, KFDAVR.READ_KEY_INFO, i]
+            command = [OPKFD.CMD_READ_REQ, KFDAVR.READ_KEY_INFO, i]
             self.writeToSerial(command)
             resp = self.readFromSerial()
             
             opcode = resp[0]
             subop = resp[1]
-            assert opcode == OPKFD.READ_REPLY
-            assert subop == KFDAVR.READ_KEY_INFO
+            print(opcode)
+            print(subop)
+            if (opcode == OPKFD.ERROR_READ_FAILED):
+                #there probably isn't a key here
+                pass
+            elif (opcode == OPKFD.REPLY_READ):
+                if (opcode == KFDAVR.READ_KEY_INFO):
+                    ckr |= resp[4] << 8
+                    ckr |= resp[5]
+                    kid |= resp[6] << 8
+                    kid |= resp[7]
+                else:
+                    raise Exception("KFD replied with unknown read data")
+            else:
+                raise Exception("KFD replied with unknown opcode")
 
-            ckr |= cmdData[4] << 8
-            ckr |= cmdData[5]
-            kid |= cmdData[6] << 8
-            kid |= cmdData[7]
-    def writeInstalledKey(self, keyToInstall):
+    def writeInstalledKey(self, slot, keyToInstall):
+        if (not isinstance(slot, int)):
+            raise TypeError("Slot must be an int, not {}".format(type(slot)))
+        if (slot > KFDAVR.MAX_INSTALLED_KEYS):
+            raise ValueError("You tried to install a key into slot {}; while the device supports a maximum of {} slots.".format(slot, KFDAVR.MAX_INSTALLED_KEYS))
+
         if (isinstance(keyToInstall, KeyItem)):
-            pass
+            command = [OPKFD.CMD_WRITE_REQ, KFDAVR.WRITE_KEY]
+            command[2] = (slot >> 8) & 0xFF
+            command[3] = 0  # flags are reserved for now
+            command[4] = (keyToInstall.sln >> 8) & 0xFF
+            command[5] = (keyToInstall.sln & 0xFF)
+            command[6] = (keyToInstall.kid >> 8) & 0xFF
+            command[7] = (keyToInstall.kid & 0xFF)
+
+            for b in keyToInstall.key:
+                command.append(b)
         else:
             raise TypeError("You must pass a KeyItem type to me; see pykmm.kmm.items.KeyItem")
 
     def zeroizeInstalledKeys(self):
-        command = [OPKFD.WRITE_REQ, KFDAVR.WRITE_KEY, 0xFE]
+        command = [OPKFD.CMD_WRITE_REQ, KFDAVR.WRITE_KEY, 0xFE]
+        self.writeToSerial(command)
         
     def enterBootloader(self):
         raise NotImplementedError("Bootloader mode does not exist on KFD-AVR")
@@ -371,6 +399,7 @@ def main():
     selfTestResult = kfd.selfTest()
     selfTestText = KFDAVR.KFDSelfTestCodes[selfTestResult]
     print("SelfTest: {} ({})".format(selfTestResult, selfTestText))
+    print("Installed Keys: {}".format(kfd.getInstalledKeyInfo()))
 
     sys.exit()
 

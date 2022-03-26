@@ -89,37 +89,34 @@ class TestKeyItem(unittest.TestCase):
         """Test all key get, set, and invalid paths"""
 
         # set the key then get it
-        self._keyitem.key = 0x1234
-        self.assertEqual(self._keyitem.key, 0x1234)
+        self._keyitem.key = [0x12, 0x34]
+        self.assertEqual(self._keyitem.key, [0x12, 0x34])
 
-        self._keyitem.key = 156
-        self.assertEqual(self._keyitem.key, 156)
-
-        #test with AES key
-        keyValue = 0x3773F47225F4497210358367DEDD55996AB8F774B41FD945888E2E1958DAA025
-        self._keyitem.key = keyValue
-        self.assertEqual(self._keyitem.key, keyValue)
+        #test with AES key as int
+        keyList = [0x37, 0x73, 0xF4, 0x72, 0x25, 0xF4, 0x49, 0x72, 0x10, 0x35, 0x83, 0x67, 0xDE, 0xDD, 0x55, 0x99, 0x6A, 0xB8, 0xF7, 0x74, 0xB4, 0x1F, 0xD9, 0x45, 0x88, 0x8E, 0x2E, 0x19, 0x58, 0xDA, 0xA0, 0x25]
+        self._keyitem.key = keyList
+        self.assertEqual(self._keyitem.key, keyList)
 
         #test with DES-OFB key
-        keyValue = 0xDCF8D675984A75F4
-        self._keyitem.key = keyValue
-        self.assertEqual(self._keyitem.key, keyValue)
+        keyList = [0xDC, 0xF8, 0xD6, 0x75, 0x98, 0x4A, 0x75, 0xF4]
+        self._keyitem.key = keyList
+        self.assertEqual(self._keyitem.key, keyList)
 
         #test with ADP key
-        keyValue = 0x71D4C373D6
-        self._keyitem.key = keyValue
-        self.assertEqual(self._keyitem.key, keyValue)
+        keyValue = [0x71, 0xD4, 0xC3, 0x73, 0xD6]
+        self._keyitem.key = keyList
+        self.assertEqual(self._keyitem.key, keyList)
 
         #test with invalid types
         with self.assertRaises(TypeError):
             self._keyitem.key = "beans"
 
         with self.assertRaises(TypeError):
-            self._keyitem.key = [0x0, 0x1, 0x2, 0x3]
+            self._keyitem.key = 0x12345678
 
     def test_key_tobytes(self):
         """Test turning the KeyItem object to bytes"""
-        self._keyitem.key = 0x71D4C373D6
+        self._keyitem.key = [0x71, 0xD4, 0xC3, 0x73, 0xD6]
         self._keyitem.sln = 0x1234
         self._keyitem.kid = 0x5678
         self._keyitem.erase = False

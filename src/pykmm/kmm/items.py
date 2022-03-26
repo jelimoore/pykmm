@@ -25,6 +25,7 @@
 ###############################################################################
 
 from bitarray import bitarray
+from bitarray.util import ba2int, zeros
 
 class KeyItem():
     def __init__(self):
@@ -57,9 +58,9 @@ class KeyItem():
             if (kidIn > 0 and kidIn < 0xFFFF):
                 self._kid = kidIn
             else:
-                raise ValueError("SLN must be between 0x0 and 0xFFFF")
+                raise ValueError("KID must be between 0x0 and 0xFFFF")
         else:
-            raise TypeError("SLN must be an int type")
+            raise TypeError("KID must be an int type")
     
     def del_kid(self):
         del self._kid
@@ -68,10 +69,10 @@ class KeyItem():
         return self._key
     
     def set_key(self, keyIn):
-        if (isinstance(keyIn, int)):
+        if (isinstance(keyIn, list)):
             self._key = keyIn
         else:
-            raise TypeError("SLN must be an int type")
+            raise TypeError("Key must be a list, but was {}".format(type(keyIn)))
     
     def del_key(self):
         del self._key
@@ -81,15 +82,15 @@ class KeyItem():
         keyItemFormat[7] = self.kek
         keyItemFormat[5] = self.erase
 
-        keyItemBytes = bytearray(5 + len(self._key))
-        keyItemBytes[0] = keyItemFormat
-        #keyItemBytes += self._sln   # 2 bytes
-        #keyItemBytes += self._kid   # 2 bytes
-        #keyItemBytes += self._key   # however long the key is
+        keyItemData = []
+        keyItemData.append(ba2int(keyItemFormat))
+        #keyItemData += self._sln   # 2 bytes
+        #keyItemData += self._kid   # 2 bytes
+        #keyItemData += self._key   # however long the key is
 
         #TODO: finish this
 
-        return keyItemBytes
+        return bytearray(keyItemData)
 
     def parse(self, bytesIn):
         if (len(bytesIn) < 5):
@@ -97,9 +98,13 @@ class KeyItem():
 
         #TODO: finish
 
+    '''SLN, or storage location number, of the key'''
     sln = property(get_sln, set_sln, del_sln)
     kid = property(get_kid, set_kid, del_kid)
     key = property(get_key, set_key, del_key)
+
+    def __str__(self):
+        return f"<KeyItem 0x{self._kid:X}>"
 
 
 class KeyInfo():
@@ -147,13 +152,14 @@ class KeyInfo():
         if (isinstance(keyIn, int)):
             self._key = keyIn
         else:
-            raise TypeError("SLN must be an int type")
+            raise TypeError("Key must be an int type")
     
     def del_key(self):
         del self._key
 
     def to_bytes(self):
-        keyItemFormat = bitarray(8)
+        # create empty bitarray
+        keyItemFormat = zeros(8)
         keyItemFormat[7] = self.kek
         keyItemFormat[5] = self.erase
 
